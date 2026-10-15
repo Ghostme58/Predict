@@ -1,21 +1,20 @@
-# Игнорировать большие датасеты
-data/ga_sessions.csv
-data/ga_hits.csv
-
-# Игнорировать временные файлы Python
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Игнорировать файлы IDE
-.idea/
-.vscode/
-
-# Игнорировать виртуальные окружения
+*.py[cod]
 .venv/
 .env
 
-.DS_Store
+# Jupyter and IDE
 .ipynb_checkpoints/
 .virtual_documents/
+.idea/
+.vscode/
+.DS_Store
+
+# Training artefacts and logs
+catboost_info/
+*.log
+
+# Original datasets are too large to store in this repository
+data/ga_sessions.csv
+data/ga_hits.csv

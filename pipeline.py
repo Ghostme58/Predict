@@ -11,6 +11,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
+from sklearn.utils import resample
 
 def main():
     print('Target Action Prediction Pipeline')
@@ -28,10 +29,27 @@ def main():
     ]
     df_hits['target'] = df_hits['event_action'].isin(target_actions).astype(int)
 
+    df_combined = pd.merge(df_sessions, df_hits, on='session_id', how='left')
+
     # Агрегация df_hits на уровне сессий
-    df_hits_agg = df_hits.groupby('session_id')['target'].max().reset_index()
-    df_combined = pd.merge(df_sessions, df_hits_agg, on='session_id', how='left')
+    agg_hits = df_combined.groupby('session_id').agg(
+        target=('target', 'max'),  # Была ли хоть одна целевая активность
+        n_hits=('hit_type', 'count'),
+        n_pages=('hit_page_path', 'nunique'),
+        n_events=('event_action', 'count'),
+        n_event_types=('event_action', 'nunique'),
+        n_hit_types=('hit_type', 'nunique'),
+        session_duration=('hit_time', lambda x: x.max() - x.min())
+    ).reset_index()
+    df_combined = agg_hits.merge(df_sessions, on='session_id', how='left')
     df_combined['target'] = df_combined['target'].fillna(0).astype(int)
+
+    # Новая фильтрация: удаление аномальных пользователей по количеству действий
+    client_session_counts = df_sessions['client_id'].value_counts()
+    bots = client_session_counts[client_session_counts > 100].index
+    df_combined = df_combined[~df_combined['client_id'].isin(bots)]
+
+    df_combined = df_combined.drop(columns=['n_hit_types','n_event_types','n_events', 'n_pages', 'n_hits', 'session_duration'])
 
     # Заполнение пропусков
     df_combined['device_model'] = df_combined['device_model'].fillna('other')
@@ -44,6 +62,8 @@ def main():
     for col in utm_columns:
         mode_value = df_combined[col].mode()[0]
         df_combined[col] = df_combined[col].fillna(mode_value)
+
+    df_combined = df_combined.dropna(subset=['client_id'])
 
     # Удаление дубликатов
     df_combined = df_combined.drop_duplicates(keep='last')
@@ -64,6 +84,11 @@ def main():
     outliers = visit_counts[(visit_counts['count'] < lower_bound) | (visit_counts['count'] > upper_bound)]
     df_filtered = df_combined[~df_combined['visit_date'].isin(outliers['visit_date'])]
 
+    target_counts = df_filtered[df_filtered['target'] == 1].groupby('visit_date').size().reset_index(name='target_count')
+    mean_target_count = target_counts['target_count'].mean()
+    std_target_count = target_counts['target_count'].std()
+    outliers_target = target_counts[target_counts['target_count'] > mean_target_count + 3 * std_target_count]
+    df_filtered = df_filtered[~df_filtered['visit_date'].isin(outliers_target['visit_date'])]
 
     # Feature Engineering
 
@@ -119,6 +144,18 @@ def main():
     for col in numerical_features:
         df_filtered[col] = pd.to_numeric(df_filtered[col], downcast='integer')
 
+    #уменьшаем количество отрицательных целевых действий для балансировки тренировочного датасета
+
+    df_majority = df_filtered[df_filtered['target'] == 0]
+    df_minority = df_filtered[df_filtered['target'] == 1]
+
+    df_majority_downsampled = resample(df_majority,
+                                       replace=False,
+                                       n_samples=len(df_minority)*5,  # или 3, зависит от баланса
+                                       random_state=42)
+
+    df_filtered = pd.concat([df_majority_downsampled, df_minority])
+
     # Определение X и y
     X = df_filtered.drop(columns=['target'])
     y = df_filtered['target']
@@ -151,7 +188,7 @@ def main():
             n_estimators=100, num_leaves=100, random_state=42, verbose=-1
         ),
         CatBoostClassifier(
-            auto_class_weights='Balanced', depth=6, iterations=200,
+            auto_class_weights='Balanced', depth=10, iterations=200,
             l2_leaf_reg=3, learning_rate=0.1, random_state=42, verbose=0
         )
     )

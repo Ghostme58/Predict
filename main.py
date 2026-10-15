@@ -34,7 +34,7 @@ class Prediction(BaseModel):
 
 @app.get('/status')
 def status():
-    return "I'm OK"
+    return "I'm OK!"
 
 @app.get('/version')
 def version():
